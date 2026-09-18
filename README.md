@@ -412,6 +412,8 @@ CONTAINER ID   IMAGE          COMMAND                  CREATED          STATUS  
 c98e231cf98b   nginx:alpine   "/docker-entrypoint.…"   10 seconds ago   Up 9 seconds   0.0.0.0:80->80/tcp, [::]:80->80/tcp   web
 ```
 
+![docker ps 실행 화면](docs/assets/docker-ps.png)
+
 인스턴스 안에서 자기 자신에게 요청하면 200이 돌아옵니다. 응답 헤더의 서버 버전이 패키지로 설치했던 nginx/1.24.0이 아니라 이미지에 들어 있는 nginx/1.31.6이므로, 응답을 돌려주는 주체가 컨테이너임을 알 수 있습니다.
 
 ```bash
