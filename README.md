@@ -107,3 +107,90 @@ $ aws iam list-attached-user-policies --user-name b3-1-practice
 
 aws: [ERROR]: An error occurred (AccessDenied) when calling the ListAttachedUserPolicies operation: User: arn:aws:iam::************:user/b3-1-practice is not authorized to perform: iam:ListAttachedUserPolicies on resource: user b3-1-practice because no identity-based policy allows the iam:ListAttachedUserPolicies action.
 ```
+
+## 네트워크 구성
+
+VPC, 퍼블릭 서브넷, 인터넷 게이트웨이, 라우트 테이블을 차례로 만들었습니다. 모든 리소스에는 `b3-1-` 접두사를 붙인 Name 태그를 달아 나중에 목록에서 골라낼 수 있게 했습니다.
+
+```bash
+$ aws ec2 create-vpc --cidr-block 10.0.0.0/16 \
+    --tag-specifications 'ResourceType=vpc,Tags=[{Key=Name,Value=b3-1-vpc}]' \
+    --query 'Vpc.{VpcId:VpcId,CidrBlock:CidrBlock,State:State}'
+{
+    "VpcId": "vpc-03eae37b07d72dc9f",
+    "CidrBlock": "10.0.0.0/16",
+    "State": "pending"
+}
+```
+
+서브넷은 VPC 대역 10.0.0.0/16 안에서 10.0.1.0/24를 잘라 가용 영역 ap-northeast-2a에 만들었습니다.
+
+```bash
+$ aws ec2 create-subnet --vpc-id vpc-03eae37b07d72dc9f --cidr-block 10.0.1.0/24 \
+    --availability-zone ap-northeast-2a \
+    --tag-specifications 'ResourceType=subnet,Tags=[{Key=Name,Value=b3-1-public-subnet}]' \
+    --query 'Subnet.{SubnetId:SubnetId,CidrBlock:CidrBlock,AvailabilityZone:AvailabilityZone,MapPublicIpOnLaunch:MapPublicIpOnLaunch}'
+{
+    "SubnetId": "subnet-07dfd6eac691dacaa",
+    "CidrBlock": "10.0.1.0/24",
+    "AvailabilityZone": "ap-northeast-2a",
+    "MapPublicIpOnLaunch": false
+}
+```
+
+`MapPublicIpOnLaunch`가 false이면 이 서브넷에서 만든 인스턴스에 퍼블릭 IP가 붙지 않습니다. 서브넷 속성을 켜서 이후 생성하는 인스턴스가 자동으로 퍼블릭 IP를 받도록 했습니다.
+
+```bash
+$ aws ec2 modify-subnet-attribute --subnet-id subnet-07dfd6eac691dacaa --map-public-ip-on-launch
+$ aws ec2 describe-subnets --subnet-ids subnet-07dfd6eac691dacaa --query 'Subnets[0].MapPublicIpOnLaunch'
+true
+```
+
+인터넷 게이트웨이를 만들어 VPC에 연결했습니다. 연결 명령은 성공하면 출력이 없습니다.
+
+```bash
+$ aws ec2 create-internet-gateway \
+    --tag-specifications 'ResourceType=internet-gateway,Tags=[{Key=Name,Value=b3-1-igw}]' \
+    --query 'InternetGateway.InternetGatewayId' --output text
+igw-0229ed6acb6aa410a
+$ aws ec2 attach-internet-gateway --internet-gateway-id igw-0229ed6acb6aa410a --vpc-id vpc-03eae37b07d72dc9f
+```
+
+라우트 테이블을 만들고 기본 경로를 인터넷 게이트웨이로 향하게 한 뒤 서브넷에 연결했습니다.
+
+```bash
+$ aws ec2 create-route-table --vpc-id vpc-03eae37b07d72dc9f \
+    --tag-specifications 'ResourceType=route-table,Tags=[{Key=Name,Value=b3-1-public-rtb}]' \
+    --query 'RouteTable.RouteTableId' --output text
+rtb-0f3a3f86b4e749e9d
+$ aws ec2 create-route --route-table-id rtb-0f3a3f86b4e749e9d --destination-cidr-block 0.0.0.0/0 --gateway-id igw-0229ed6acb6aa410a
+{
+    "Return": true
+}
+$ aws ec2 associate-route-table --route-table-id rtb-0f3a3f86b4e749e9d --subnet-id subnet-07dfd6eac691dacaa --query 'AssociationId' --output text
+rtbassoc-0f2fb76bb65cb0765
+```
+
+구성한 라우트 테이블의 경로와 연결 상태입니다.
+
+```bash
+$ aws ec2 describe-route-tables --route-table-ids rtb-0f3a3f86b4e749e9d \
+    --query 'RouteTables[0].{Routes:Routes[].{Destination:DestinationCidrBlock,Target:join(``,[GatewayId]),State:State},Subnet:Associations[0].SubnetId}'
+{
+    "Routes": [
+        {
+            "Destination": "10.0.0.0/16",
+            "Target": "local",
+            "State": "active"
+        },
+        {
+            "Destination": "0.0.0.0/0",
+            "Target": "igw-0229ed6acb6aa410a",
+            "State": "active"
+        }
+    ],
+    "Subnet": "subnet-07dfd6eac691dacaa"
+}
+```
+
+local 경로는 VPC를 만들 때 자동으로 생기며 VPC 내부 통신을 처리합니다. 여기에 더한 0.0.0.0/0 경로가 인터넷 게이트웨이를 향하기 때문에, 이 서브넷에 있는 인스턴스는 VPC 대역에 속하지 않는 주소로 나가는 트래픽을 게이트웨이로 보냅니다. 이 경로가 없으면 인스턴스에 퍼블릭 IP가 있어도 외부와 통신하지 못합니다.
