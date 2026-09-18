@@ -356,6 +356,10 @@ $ curl -sS -o /dev/null -w "%{http_code}\n" http://43.201.149.54
 200
 ```
 
+브라우저로 같은 주소에 접속한 화면입니다.
+
+![브라우저에서 퍼블릭 IP로 접속한 화면](docs/assets/browser-nginx.png)
+
 접속이 되지 않는 상황을 재현해 원인을 좁힌 과정은 [트러블슈팅 보고서](docs/troubleshooting.md)에 정리했습니다.
 
 ## 개념 정리
@@ -446,3 +450,7 @@ $ curl -sS http://43.201.149.54
 </body>
 </html>
 ```
+
+브라우저에서 접속하면 컨테이너가 서비스하는 페이지가 보입니다.
+
+![컨테이너 배포 후 브라우저 접속 화면](docs/assets/browser-container.png)
