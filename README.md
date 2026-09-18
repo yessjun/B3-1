@@ -233,3 +233,110 @@ $ aws ec2 describe-security-groups --group-ids sg-0d48678d6a69187e0 \
 ```
 
 포트 범위가 각각 80, 22 한 개씩이고 22번은 /32 단일 주소로 묶여 있습니다. 전체 포트를 여는 규칙이나 22번을 0.0.0.0/0으로 여는 규칙은 만들지 않았습니다. SSH는 서버를 다루는 통로라 열려 있으면 곧바로 비밀번호 대입 시도가 들어옵니다. 반면 HTTP는 서비스 자체가 불특정 다수를 받아야 하므로 열어둘 수밖에 없고, 대신 그 뒤에 있는 웹 서버만 노출됩니다.
+
+## 인스턴스 생성
+
+키페어를 만들어 개인키를 로컬에 저장했습니다.
+
+```bash
+$ aws ec2 create-key-pair --key-name b3-1-key \
+    --tag-specifications 'ResourceType=key-pair,Tags=[{Key=Name,Value=b3-1-key}]' \
+    --query 'KeyMaterial' --output text > b3-1-key.pem
+$ chmod 400 b3-1-key.pem
+$ aws ec2 describe-key-pairs --key-names b3-1-key --query 'KeyPairs[0].{Name:KeyName,Type:KeyType,Fingerprint:KeyFingerprint}'
+{
+    "Name": "b3-1-key",
+    "Type": "rsa",
+    "Fingerprint": "df:16:49:3c:a1:93:d0:dd:db:91:f6:a7:93:d9:ef:47:e7:45:a2:12"
+}
+```
+
+OS는 Ubuntu 24.04 LTS를 골랐습니다. AMI ID는 리전마다 다르고 새 빌드가 나올 때마다 바뀌므로, Canonical 계정이 소유한 이미지 중 가장 최근 것을 조회해서 사용했습니다.
+
+```bash
+$ aws ec2 describe-images --owners 099720109477 \
+    --filters 'Name=name,Values=ubuntu/images/hvm-ssd*/ubuntu-noble-24.04-amd64-server-*' 'Name=state,Values=available' \
+    --query 'sort_by(Images,&CreationDate)[-1].{ImageId:ImageId,Name:Name,CreationDate:CreationDate}'
+{
+    "ImageId": "ami-086a43496cb46286c",
+    "Name": "ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-20260904",
+    "CreationDate": "2026-09-04T11:45:57.000Z"
+}
+```
+
+앞에서 만든 서브넷과 보안 그룹을 지정해 t2.micro 인스턴스 한 대를 만들었습니다.
+
+```bash
+$ aws ec2 run-instances --image-id ami-086a43496cb46286c --instance-type t2.micro \
+    --key-name b3-1-key --subnet-id subnet-07dfd6eac691dacaa --security-group-ids sg-0d48678d6a69187e0 \
+    --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=b3-1-web}]' \
+    --query 'Instances[0].{InstanceId:InstanceId,InstanceType:InstanceType,State:State.Name,SubnetId:SubnetId}'
+{
+    "InstanceId": "i-03b18cea700e89319",
+    "InstanceType": "t2.micro",
+    "State": "pending",
+    "SubnetId": "subnet-07dfd6eac691dacaa"
+}
+$ aws ec2 wait instance-running --instance-ids i-03b18cea700e89319
+$ aws ec2 describe-instances --instance-ids i-03b18cea700e89319 \
+    --query 'Reservations[0].Instances[0].{State:State.Name,PublicIp:PublicIpAddress,PrivateIp:PrivateIpAddress,Volume:BlockDeviceMappings[0].Ebs.VolumeId}'
+{
+    "State": "running",
+    "PublicIp": "43.201.149.54",
+    "PrivateIp": "10.0.1.203",
+    "Volume": "vol-0a0024f0cf452a8bd"
+}
+```
+
+프라이빗 IP 10.0.1.203은 서브넷 대역 10.0.1.0/24 안에서 받은 주소이고, 퍼블릭 IP 43.201.149.54는 서브넷 속성을 켜둔 덕분에 자동으로 붙었습니다.
+
+## SSH 접속과 웹 서버 배포
+
+보안 그룹에 등록한 IP에서 SSH로 접속됩니다.
+
+```bash
+$ ssh -i b3-1-key.pem ubuntu@43.201.149.54 'hostname; . /etc/os-release && echo $PRETTY_NAME; uptime'
+Warning: Permanently added '43.201.149.54' (ED25519) to the list of known hosts.
+ip-10-0-1-203
+Ubuntu 24.04.4 LTS
+ 03:01:16 up 0 min,  1 user,  load average: 0.30, 0.09, 0.03
+```
+
+인스턴스에서 바깥으로 나가는 통신도 되는지 확인했습니다. 라우트 테이블의 0.0.0.0/0 경로와 인터넷 게이트웨이가 동작하고 있다는 뜻입니다.
+
+```bash
+$ ssh -i b3-1-key.pem ubuntu@43.201.149.54 'curl -sS -I https://example.com | head -3'
+HTTP/2 200
+date: Fri, 18 Sep 2026 03:01:40 GMT
+content-type: text/html
+```
+
+nginx를 설치했습니다.
+
+```bash
+$ ssh -i b3-1-key.pem ubuntu@43.201.149.54 'sudo apt-get update -qq && sudo apt-get install -y -qq nginx'
+$ ssh -i b3-1-key.pem ubuntu@43.201.149.54 'nginx -v; systemctl is-active nginx; systemctl status nginx --no-pager | head -6'
+nginx version: nginx/1.24.0 (Ubuntu)
+active
+● nginx.service - A high performance web server and a reverse proxy server
+     Loaded: loaded (/usr/lib/systemd/system/nginx.service; enabled; preset: enabled)
+     Active: active (running) since Fri 2026-09-18 03:02:22 UTC; 27s ago
+       Docs: man:nginx(8)
+    Process: 1827 ExecStartPre=/usr/sbin/nginx -t -q -g daemon on; master_process on; (code=exited, status=0/SUCCESS)
+    Process: 1829 ExecStart=/usr/sbin/nginx -g daemon on; master_process on; (code=exited, status=0/SUCCESS)
+```
+
+인스턴스 안에서 자기 자신에게 요청하면 200이 돌아옵니다. 여기까지는 보안 그룹과 무관하게 서버 프로세스가 살아 있는지만 확인하는 단계입니다.
+
+```bash
+$ ssh -i b3-1-key.pem ubuntu@43.201.149.54 'curl -sS -o /dev/null -w "%{http_code}\n" http://localhost; curl -sS http://localhost | head -8'
+200
+<!DOCTYPE html>
+<html>
+<head>
+<title>Welcome to nginx!</title>
+<style>
+html { color-scheme: light dark; }
+body { width: 35em; margin: 0 auto;
+font-family: Tahoma, Verdana, Arial, sans-serif; }
+```
