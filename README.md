@@ -340,3 +340,18 @@ html { color-scheme: light dark; }
 body { width: 35em; margin: 0 auto;
 font-family: Tahoma, Verdana, Arial, sans-serif; }
 ```
+
+## 구성도
+
+![아키텍처 구성도](docs/architecture.png)
+
+## 외부 접속 확인
+
+검증 방식은 (A) 브라우저 접속을 선택했습니다. 접속 주소는 `http://43.201.149.54`입니다.
+
+로컬에서 퍼블릭 IP로 요청하면 200이 돌아옵니다.
+
+```bash
+$ curl -sS -o /dev/null -w "%{http_code}\n" http://43.201.149.54
+200
+```
