@@ -19,7 +19,7 @@ $ ssh -V
 OpenSSH_9.9p2, LibreSSL 3.3.6
 ```
 
-모든 리소스는 서울 리전(ap-northeast-2)에 만들었습니다.
+모든 리소스는 서울 리전(ap-northeast-2)에 만들었습니다. 아래 명령 출력에서 AWS 계정 ID와 작업에 사용한 회선의 공인 IP는 가렸습니다.
 
 ## IAM 사용자와 권한
 
@@ -194,3 +194,42 @@ $ aws ec2 describe-route-tables --route-table-ids rtb-0f3a3f86b4e749e9d \
 ```
 
 local 경로는 VPC를 만들 때 자동으로 생기며 VPC 내부 통신을 처리합니다. 여기에 더한 0.0.0.0/0 경로가 인터넷 게이트웨이를 향하기 때문에, 이 서브넷에 있는 인스턴스는 VPC 대역에 속하지 않는 주소로 나가는 트래픽을 게이트웨이로 보냅니다. 이 경로가 없으면 인스턴스에 퍼블릭 IP가 있어도 외부와 통신하지 못합니다.
+
+## 보안 그룹
+
+인바운드는 두 개만 열었습니다. HTTP(80)는 누구나 접속해야 하므로 0.0.0.0/0에서 받고, SSH(22)는 작업에 사용하는 회선의 공인 IP 한 개만 허용했습니다.
+
+```bash
+$ curl -s https://checkip.amazonaws.com
+xxx.xxx.xxx.xx
+$ aws ec2 create-security-group --group-name b3-1-web-sg \
+    --description "B3-1 web server access" --vpc-id vpc-03eae37b07d72dc9f \
+    --tag-specifications 'ResourceType=security-group,Tags=[{Key=Name,Value=b3-1-web-sg}]' \
+    --query 'GroupId' --output text
+sg-0d48678d6a69187e0
+$ aws ec2 authorize-security-group-ingress --group-id sg-0d48678d6a69187e0 \
+    --protocol tcp --port 80 --cidr 0.0.0.0/0 \
+    --query 'SecurityGroupRules[0].SecurityGroupRuleId' --output text
+sgr-07980b16c37452a12
+$ aws ec2 authorize-security-group-ingress --group-id sg-0d48678d6a69187e0 \
+    --protocol tcp --port 22 --cidr xxx.xxx.xxx.xx/32 \
+    --query 'SecurityGroupRules[0].SecurityGroupRuleId' --output text
+sgr-0829d66148ed8b2de
+```
+
+적용된 인바운드 규칙입니다.
+
+```bash
+$ aws ec2 describe-security-groups --group-ids sg-0d48678d6a69187e0 \
+    --query 'SecurityGroups[0].IpPermissions[].{Protocol:IpProtocol,From:FromPort,To:ToPort,Cidr:IpRanges[0].CidrIp}' --output table
+-------------------------------------------------
+|            DescribeSecurityGroups             |
++--------------------+-------+------------+-----+
+|        Cidr        | From  | Protocol   | To  |
++--------------------+-------+------------+-----+
+|  0.0.0.0/0         |  80   |  tcp       |  80 |
+|  xxx.xxx.xxx.xx/32 |  22   |  tcp       |  22 |
++--------------------+-------+------------+-----+
+```
+
+포트 범위가 각각 80, 22 한 개씩이고 22번은 /32 단일 주소로 묶여 있습니다. 전체 포트를 여는 규칙이나 22번을 0.0.0.0/0으로 여는 규칙은 만들지 않았습니다. SSH는 서버를 다루는 통로라 열려 있으면 곧바로 비밀번호 대입 시도가 들어옵니다. 반면 HTTP는 서비스 자체가 불특정 다수를 받아야 하므로 열어둘 수밖에 없고, 대신 그 뒤에 있는 웹 서버만 노출됩니다.
