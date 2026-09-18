@@ -379,3 +379,70 @@ Security Group은 인스턴스 앞에 붙는 가상 방화벽으로, 어떤 출�
 ### 과금이 발생하는 지점
 
 EC2는 인스턴스가 실행 중인 시간만큼, EBS 볼륨은 인스턴스를 정지해도 볼륨이 남아 있는 동안 계속 과금됩니다. Elastic IP는 인스턴스에 연결되어 있으면 무료지만 할당만 해두고 붙이지 않으면 요금이 붙고, NAT Gateway나 로드밸런서는 존재하는 것만으로 시간당 요금이 발생합니다. 이번 실습에서는 Elastic IP와 NAT Gateway를 만들지 않고 인스턴스에 자동 할당된 퍼블릭 IP를 사용했습니다.
+
+## 보너스: Docker 컨테이너로 웹 서비스 배포
+
+같은 인스턴스에 Docker를 설치하고, 패키지로 설치한 nginx 대신 컨테이너가 80번을 서비스하도록 바꿨습니다.
+
+```bash
+$ ssh -i b3-1-key.pem ubuntu@43.201.149.54 'sudo apt-get install -y -qq docker.io; docker --version; sudo systemctl is-active docker'
+Docker version 29.1.3, build 29.1.3-0ubuntu3~24.04.2
+active
+```
+
+컨테이너가 호스트의 80번을 받아야 하므로 패키지로 설치한 nginx를 먼저 내렸습니다. 이미지는 공개 이미지 `nginx:alpine`을 사용하고, 서비스할 페이지는 컨테이너 안의 기본 문서 경로에 읽기 전용으로 마운트했습니다.
+
+```bash
+$ scp -i b3-1-key.pem app/index.html ubuntu@43.201.149.54:/home/ubuntu/index.html
+$ ssh -i b3-1-key.pem ubuntu@43.201.149.54 'sudo systemctl stop nginx && sudo systemctl disable nginx'
+Removed "/etc/systemd/system/multi-user.target.wants/nginx.service".
+$ ssh -i b3-1-key.pem ubuntu@43.201.149.54 'sudo docker run -d --name web -p 80:80 -v /home/ubuntu/index.html:/usr/share/nginx/html/index.html:ro nginx:alpine'
+c98e231cf98bf76540780e3cc4d48a21b5798d9f6e480ae681093dae37bdf104
+```
+
+실행한 이미지는 `nginx:alpine`, 컨테이너 이름은 `web`, 포트 매핑은 호스트 80번을 컨테이너 80번에 연결한 `-p 80:80`입니다.
+
+```bash
+$ ssh -i b3-1-key.pem ubuntu@43.201.149.54 'sudo docker ps'
+CONTAINER ID   IMAGE          COMMAND                  CREATED          STATUS         PORTS                                 NAMES
+c98e231cf98b   nginx:alpine   "/docker-entrypoint.…"   10 seconds ago   Up 9 seconds   0.0.0.0:80->80/tcp, [::]:80->80/tcp   web
+```
+
+인스턴스 안에서 자기 자신에게 요청하면 200이 돌아옵니다. 응답 헤더의 서버 버전이 패키지로 설치했던 nginx/1.24.0이 아니라 이미지에 들어 있는 nginx/1.31.6이므로, 응답을 돌려주는 주체가 컨테이너임을 알 수 있습니다.
+
+```bash
+$ ssh -i b3-1-key.pem ubuntu@43.201.149.54 'curl -sS -o /dev/null -w "localhost:%{http_code}\n" http://localhost; curl -sS -I http://localhost | head -2; curl -sS http://localhost'
+localhost:200
+HTTP/1.1 200 OK
+Server: nginx/1.31.6
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>B3-1</title>
+</head>
+<body>
+  <h1>B3-1</h1>
+  <p>Hello Cloud</p>
+</body>
+</html>
+```
+
+외부에서도 같은 응답을 받습니다.
+
+```bash
+$ curl -sS -o /dev/null -w "%{http_code}\n" http://43.201.149.54
+200
+$ curl -sS http://43.201.149.54
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>B3-1</title>
+</head>
+<body>
+  <h1>B3-1</h1>
+  <p>Hello Cloud</p>
+</body>
+</html>
+```
