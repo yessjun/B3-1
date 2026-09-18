@@ -467,6 +467,48 @@ $ curl -sS http://43.201.149.54
 
 ![컨테이너 배포 후 브라우저 접속 화면](docs/assets/browser-container.png)
 
+## 헬스체크 방식으로도 확인
+
+외부 접속 검증은 (A) 브라우저로 했지만, (B) 방식이 실제로 무엇을 추가해야 하는지 확인해보려고 같은 구성을 한 번 더 만들어 시험했습니다. 앞의 리소스를 정리한 뒤라 VPC부터 다시 만들었고, 이때 인스턴스 주소는 3.36.85.14입니다.
+
+nginx 기본 사이트 설정에 `/health` 위치를 추가했습니다. 정확히 일치하는 경로만 받도록 `=`를 붙였고, 응답은 고정 문자열입니다.
+
+```bash
+$ ssh -i b3-1-key.pem ubuntu@3.36.85.14 'cat /etc/nginx/sites-available/default'
+server {
+    listen 80 default_server;
+
+    root /var/www/html;
+    index index.nginx-debian.html;
+
+    location = /health {
+        default_type text/plain;
+        return 200 'OK';
+    }
+}
+$ ssh -i b3-1-key.pem ubuntu@3.36.85.14 'sudo nginx -t && sudo systemctl reload nginx'
+nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+nginx: configuration file /etc/nginx/nginx.conf test is successful
+```
+
+외부에서 호출하면 200과 고정 응답이 돌아옵니다.
+
+```bash
+$ curl -sS -D - http://3.36.85.14/health
+HTTP/1.1 200 OK
+Server: nginx/1.24.0 (Ubuntu)
+Date: Fri, 18 Sep 2026 06:14:13 GMT
+Content-Type: text/plain
+Content-Length: 2
+Connection: keep-alive
+
+OK
+```
+
+![브라우저에서 헬스체크 경로를 호출한 화면](docs/assets/browser-health.png)
+
+두 방식의 차이는 서버에 손을 대는지입니다. 브라우저 방식은 웹 서버를 올린 상태 그대로 확인하고, 헬스체크 방식은 설정을 추가하는 대신 응답 내용과 상태 코드가 고정되어 감시 도구가 판정하기 쉽습니다.
+
 ## 리소스 정리
 
 실습을 마친 뒤 만든 리소스를 모두 삭제했습니다. 삭제 명령과 확인 결과는 [리소스 정리 체크리스트](docs/cleanup-checklist.md)에 있습니다.

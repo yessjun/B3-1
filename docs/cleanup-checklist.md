@@ -1,6 +1,6 @@
 # 리소스 정리 체크리스트
 
-실습에 만든 리소스를 모두 삭제했습니다. 항목별 확인 결과는 아래 명령 출력과 같습니다.
+실습에 만든 리소스를 모두 삭제했습니다. 헬스체크 방식을 확인하느라 같은 구성을 한 번 더 만들었기 때문에 정리도 두 번 했고, 아래에 두 번 모두 기록했습니다. 항목별 확인 결과는 마지막 절에 있습니다.
 
 | 항목 | 상태 | 확인 방법 |
 |---|---|---|
@@ -64,6 +64,28 @@ $ aws ec2 delete-key-pair --key-name b3-1-key
 }
 ```
 
+## 헬스체크 확인용 리소스 정리
+
+같은 순서로 두 번째 구성도 지웠습니다.
+
+```bash
+$ aws ec2 terminate-instances --instance-ids i-068670d0e0e50962b --query 'TerminatingInstances[0].CurrentState.Name' --output text
+shutting-down
+$ aws ec2 wait instance-terminated --instance-ids i-068670d0e0e50962b
+$ aws ec2 delete-security-group --group-id sg-06449f52cc86ba02c
+{
+    "Return": true,
+    "GroupId": "sg-06449f52cc86ba02c"
+}
+$ aws ec2 delete-subnet --subnet-id subnet-0ae0d7a1f68da0660
+$ aws ec2 delete-route-table --route-table-id rtb-0e910eacbfdbafc52
+$ aws ec2 detach-internet-gateway --internet-gateway-id igw-011fa5287192e33e4 --vpc-id vpc-095376937e4df04a6
+$ aws ec2 delete-internet-gateway --internet-gateway-id igw-011fa5287192e33e4
+$ aws ec2 delete-vpc --vpc-id vpc-095376937e4df04a6
+$ aws ec2 delete-key-pair --key-name b3-1-key --query Return --output text
+True
+```
+
 ## 남은 리소스 확인
 
 이름 태그 `b3-1-` 로 조회한 결과와 계정 전체의 볼륨, Elastic IP 조회 결과입니다.
@@ -73,6 +95,10 @@ $ aws ec2 describe-instances --filters "Name=tag:Name,Values=b3-1-web" --query '
 [
     {
         "Id": "i-03b18cea700e89319",
+        "State": "terminated"
+    },
+    {
+        "Id": "i-068670d0e0e50962b",
         "State": "terminated"
     }
 ]
