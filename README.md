@@ -1,41 +1,29 @@
 # B3-1 내가 만든 웹사이트를 인터넷에 올려 누구나 쓰게 하기
 
-AWS 서울 리전에 VPC로 격리된 네트워크를 구성하고, 퍼블릭 서브넷에 배치한 EC2 인스턴스에 웹 서버를 올려 외부에서 접속 가능한 상태로 만듭니다. 보안 그룹 인바운드는 필요한 포트만 열고, 실습에는 EC2/VPC 구성에 필요한 범위로 권한을 제한한 IAM 사용자를 사용합니다.
+AWS 서울 리전에 VPC로 격리된 네트워크를 구성하고, 퍼블릭 서브넷에 배치한 EC2 인스턴스에 웹 서버를 올려 외부에서 접속 가능한 상태로 만듭니다. 보안 그룹 인바운드는 필요한 포트만 열고, 실습에는 EC2와 VPC 구성에 필요한 범위로 권한을 제한한 IAM 사용자를 사용합니다.
 
 외부 접속 검증은 (A) 브라우저에서 `http://<퍼블릭IP>`로 접속하는 방식을 선택했습니다.
 
 ## 실행 환경
 
-로컬에서 AWS CLI로 리소스를 생성하고, SSH로 인스턴스에 접속해 웹 서버를 설치했습니다.
+리소스는 AWS 관리 콘솔에서 만들었고, 인스턴스 안의 작업은 로컬 터미널에서 SSH로 접속해 진행했습니다.
 
 ```bash
 $ sw_vers
 ProductName:		macOS
 ProductVersion:		15.7.7
 BuildVersion:		24G720
-$ aws --version
-aws-cli/2.36.47 Python/3.14.7 Darwin/24.6.0 source/arm64
 $ ssh -V
 OpenSSH_9.9p2, LibreSSL 3.3.6
 ```
 
-모든 리소스는 서울 리전(ap-northeast-2)에 만들었습니다. 아래 명령 출력에서 AWS 계정 ID와 작업에 사용한 회선의 공인 IP는 가렸습니다.
+모든 리소스는 서울 리전(ap-northeast-2)에 만들었습니다. 아래 화면과 명령 출력에서 작업에 사용한 회선의 공인 IP는 가렸습니다.
 
 ## IAM 사용자와 권한
 
-실습 전용 IAM 사용자 `b3-1-practice`를 만들고, EC2와 VPC 구성에 필요한 액션만 허용한 정책을 직접 연결했습니다. 루트 계정은 이 사용자를 만들 때만 사용했고, 이후 모든 명령은 이 사용자의 액세스 키를 등록한 프로필로 실행했습니다.
+실습 전용 IAM 사용자 `b3-1-practice`를 만들고, EC2와 VPC 구성에 필요한 액션만 허용한 정책을 직접 연결했습니다. 루트 계정은 이 사용자를 만들 때만 사용했고, 콘솔 작업은 전부 이 사용자로 로그인해서 했습니다. 아래 모든 화면의 오른쪽 위에 로그인한 사용자 이름이 보입니다.
 
-```bash
-$ export AWS_PROFILE=codyssey-b3-1
-$ aws sts get-caller-identity
-{
-    "UserId": "AIDAYGB5FKKCKVE3I6QMJ",
-    "Account": "************",
-    "Arn": "arn:aws:iam::************:user/b3-1-practice"
-}
-```
-
-연결한 정책은 다음과 같습니다.
+연결한 정책입니다.
 
 ```json
 {
@@ -98,291 +86,166 @@ $ aws sts get-caller-identity
 }
 ```
 
-권한은 처음부터 넓게 열지 않았습니다. 실행 중 `UnauthorizedOperation`이나 `AccessDenied`가 나오면 오류 메시지에 찍힌 액션 이름 하나만 정책에 추가하는 방식으로 필요한 범위를 찾아갑니다. 막힐 때마다 `ec2:*`나 관리자 정책으로 한 번에 넘기면 왜 그 권한이 필요한지 알 수 없게 되고, 실습이 끝난 뒤에도 넓은 권한이 그대로 남습니다.
-
 조회용 `ec2:Describe*` 외의 액션은 `aws:RequestedRegion` 조건으로 서울 리전에서만 허용됩니다. EC2의 생성 계열 액션은 대부분 리소스 ARN 단위 제한을 지원하지 않기 때문에, 서비스와 액션 목록에 리전 조건을 더하는 방식으로 범위를 좁혔습니다. S3, RDS 같은 실습과 무관한 서비스와 IAM 조작 권한은 넣지 않았고 AdministratorAccess도 연결하지 않았습니다.
 
-실제로 이 사용자로는 자신에게 연결된 정책조차 조회할 수 없습니다.
-
-```bash
-$ aws iam list-attached-user-policies --user-name b3-1-practice
-
-aws: [ERROR]: An error occurred (AccessDenied) when calling the ListAttachedUserPolicies operation: User: arn:aws:iam::************:user/b3-1-practice is not authorized to perform: iam:ListAttachedUserPolicies on resource: user b3-1-practice because no identity-based policy allows the iam:ListAttachedUserPolicies action.
-```
+권한을 좁게 잡은 결과는 작업 중에 그대로 드러납니다. 인스턴스 시작 화면에서 보안 그룹을 고르면 콘솔이 `ec2:GetSecurityGroupsForVpc`로 규칙을 검증하려다 권한이 없다는 경고를 띄웁니다. 인스턴스 시작 자체에는 필요 없는 조회라 권한을 넓히지 않고 그대로 진행했습니다. 이 판단 과정은 [트러블슈팅 보고서](docs/troubleshooting.md)에 정리했습니다.
 
 ## 네트워크 구성
 
-VPC, 퍼블릭 서브넷, 인터넷 게이트웨이, 라우트 테이블을 차례로 만들었습니다. 모든 리소스에는 `b3-1-` 접두사를 붙인 Name 태그를 달아 나중에 목록에서 골라낼 수 있게 했습니다.
+VPC 대역은 10.0.0.0/16으로 잡고 이름 태그를 `b3-1-vpc`로 붙였습니다. 리소스마다 `b3-1-` 접두사를 붙여 나중에 목록에서 골라낼 수 있게 했습니다.
 
-```bash
-$ aws ec2 create-vpc --cidr-block 10.0.0.0/16 \
-    --tag-specifications 'ResourceType=vpc,Tags=[{Key=Name,Value=b3-1-vpc}]' \
-    --query 'Vpc.{VpcId:VpcId,CidrBlock:CidrBlock,State:State}'
-{
-    "VpcId": "vpc-03eae37b07d72dc9f",
-    "CidrBlock": "10.0.0.0/16",
-    "State": "pending"
-}
-```
+![VPC 생성 화면](docs/assets/console-vpc-create.png)
 
-서브넷은 VPC 대역 10.0.0.0/16 안에서 10.0.1.0/24를 잘라 가용 영역 ap-northeast-2a에 만들었습니다.
+생성된 VPC입니다.
 
-```bash
-$ aws ec2 create-subnet --vpc-id vpc-03eae37b07d72dc9f --cidr-block 10.0.1.0/24 \
-    --availability-zone ap-northeast-2a \
-    --tag-specifications 'ResourceType=subnet,Tags=[{Key=Name,Value=b3-1-public-subnet}]' \
-    --query 'Subnet.{SubnetId:SubnetId,CidrBlock:CidrBlock,AvailabilityZone:AvailabilityZone,MapPublicIpOnLaunch:MapPublicIpOnLaunch}'
-{
-    "SubnetId": "subnet-07dfd6eac691dacaa",
-    "CidrBlock": "10.0.1.0/24",
-    "AvailabilityZone": "ap-northeast-2a",
-    "MapPublicIpOnLaunch": false
-}
-```
+![VPC 세부 정보](docs/assets/console-vpc-detail.png)
 
-`MapPublicIpOnLaunch`가 false이면 이 서브넷에서 만든 인스턴스에 퍼블릭 IP가 붙지 않습니다. 서브넷 속성을 켜서 이후 생성하는 인스턴스가 자동으로 퍼블릭 IP를 받도록 했습니다.
+서브넷은 VPC 대역 안에서 10.0.1.0/24를 잘라 가용 영역 ap-northeast-2a에 만들었습니다. 만든 직후에는 이 서브넷에서 시작하는 인스턴스에 퍼블릭 IP가 붙지 않으므로, 서브넷 설정에서 퍼블릭 IPv4 주소 자동 할당을 켰습니다.
 
-```bash
-$ aws ec2 modify-subnet-attribute --subnet-id subnet-07dfd6eac691dacaa --map-public-ip-on-launch
-$ aws ec2 describe-subnets --subnet-ids subnet-07dfd6eac691dacaa --query 'Subnets[0].MapPublicIpOnLaunch'
-true
-```
+![서브넷과 퍼블릭 IP 자동 할당](docs/assets/console-subnet-public-ip.png)
 
-인터넷 게이트웨이를 만들어 VPC에 연결했습니다. 연결 명령은 성공하면 출력이 없습니다.
+인터넷 게이트웨이를 만들고 VPC에 연결했습니다. 연결 전에는 상태가 Detached이고, 연결하면 Attached로 바뀝니다.
 
-```bash
-$ aws ec2 create-internet-gateway \
-    --tag-specifications 'ResourceType=internet-gateway,Tags=[{Key=Name,Value=b3-1-igw}]' \
-    --query 'InternetGateway.InternetGatewayId' --output text
-igw-0229ed6acb6aa410a
-$ aws ec2 attach-internet-gateway --internet-gateway-id igw-0229ed6acb6aa410a --vpc-id vpc-03eae37b07d72dc9f
-```
+![인터넷 게이트웨이 연결 완료](docs/assets/console-igw-attached.png)
 
-라우트 테이블을 만들고 기본 경로를 인터넷 게이트웨이로 향하게 한 뒤 서브넷에 연결했습니다.
+라우팅 테이블을 만들어 0.0.0.0/0 경로를 인터넷 게이트웨이로 향하게 하고, 서브넷에 연결했습니다.
 
-```bash
-$ aws ec2 create-route-table --vpc-id vpc-03eae37b07d72dc9f \
-    --tag-specifications 'ResourceType=route-table,Tags=[{Key=Name,Value=b3-1-public-rtb}]' \
-    --query 'RouteTable.RouteTableId' --output text
-rtb-0f3a3f86b4e749e9d
-$ aws ec2 create-route --route-table-id rtb-0f3a3f86b4e749e9d --destination-cidr-block 0.0.0.0/0 --gateway-id igw-0229ed6acb6aa410a
-{
-    "Return": true
-}
-$ aws ec2 associate-route-table --route-table-id rtb-0f3a3f86b4e749e9d --subnet-id subnet-07dfd6eac691dacaa --query 'AssociationId' --output text
-rtbassoc-0f2fb76bb65cb0765
-```
+![라우팅 테이블과 서브넷 연결](docs/assets/console-route-table.png)
 
-구성한 라우트 테이블의 경로와 연결 상태입니다.
-
-```bash
-$ aws ec2 describe-route-tables --route-table-ids rtb-0f3a3f86b4e749e9d \
-    --query 'RouteTables[0].{Routes:Routes[].{Destination:DestinationCidrBlock,Target:join(``,[GatewayId]),State:State},Subnet:Associations[0].SubnetId}'
-{
-    "Routes": [
-        {
-            "Destination": "10.0.0.0/16",
-            "Target": "local",
-            "State": "active"
-        },
-        {
-            "Destination": "0.0.0.0/0",
-            "Target": "igw-0229ed6acb6aa410a",
-            "State": "active"
-        }
-    ],
-    "Subnet": "subnet-07dfd6eac691dacaa"
-}
-```
-
-local 경로는 VPC를 만들 때 자동으로 생기며 VPC 내부 통신을 처리합니다. 여기에 더한 0.0.0.0/0 경로가 인터넷 게이트웨이를 향하기 때문에, 이 서브넷에 있는 인스턴스는 VPC 대역에 속하지 않는 주소로 나가는 트래픽을 게이트웨이로 보냅니다. 이 경로가 없으면 인스턴스에 퍼블릭 IP가 있어도 외부와 통신하지 못합니다.
+10.0.0.0/16의 local 경로는 VPC를 만들 때 자동으로 생기며 VPC 내부 통신을 처리합니다. 여기에 더한 0.0.0.0/0 경로가 인터넷 게이트웨이를 향하기 때문에, 이 서브넷에 있는 인스턴스는 VPC 대역에 속하지 않는 주소로 나가는 트래픽을 게이트웨이로 보냅니다. 이 경로가 없으면 인스턴스에 퍼블릭 IP가 있어도 외부와 통신하지 못합니다. 라우팅 테이블은 서브넷에 연결해야 적용되므로 명시적 서브넷 연결까지 확인했습니다.
 
 ## 보안 그룹
 
-인바운드는 두 개만 열었습니다. HTTP(80)는 누구나 접속해야 하므로 0.0.0.0/0에서 받고, SSH(22)는 작업에 사용하는 회선의 공인 IP 한 개만 허용했습니다.
+인바운드는 두 개만 열었습니다. HTTP(80)는 누구나 접속해야 하므로 0.0.0.0/0에서 받고, SSH(22)는 소스를 "내 IP"로 지정해 작업 회선의 주소 하나(/32)만 허용했습니다.
 
-```bash
-$ curl -s https://checkip.amazonaws.com
-xxx.xxx.xxx.xx
-$ aws ec2 create-security-group --group-name b3-1-web-sg \
-    --description "B3-1 web server access" --vpc-id vpc-03eae37b07d72dc9f \
-    --tag-specifications 'ResourceType=security-group,Tags=[{Key=Name,Value=b3-1-web-sg}]' \
-    --query 'GroupId' --output text
-sg-0d48678d6a69187e0
-$ aws ec2 authorize-security-group-ingress --group-id sg-0d48678d6a69187e0 \
-    --protocol tcp --port 80 --cidr 0.0.0.0/0 \
-    --query 'SecurityGroupRules[0].SecurityGroupRuleId' --output text
-sgr-07980b16c37452a12
-$ aws ec2 authorize-security-group-ingress --group-id sg-0d48678d6a69187e0 \
-    --protocol tcp --port 22 --cidr xxx.xxx.xxx.xx/32 \
-    --query 'SecurityGroupRules[0].SecurityGroupRuleId' --output text
-sgr-0829d66148ed8b2de
-```
+![보안 그룹 인바운드 규칙](docs/assets/console-sg-rules.png)
 
-적용된 인바운드 규칙입니다.
+생성된 보안 그룹입니다. 인바운드 규칙은 SSH와 HTTP 두 건뿐입니다.
 
-```bash
-$ aws ec2 describe-security-groups --group-ids sg-0d48678d6a69187e0 \
-    --query 'SecurityGroups[0].IpPermissions[].{Protocol:IpProtocol,From:FromPort,To:ToPort,Cidr:IpRanges[0].CidrIp}' --output table
--------------------------------------------------
-|            DescribeSecurityGroups             |
-+--------------------+-------+------------+-----+
-|        Cidr        | From  | Protocol   | To  |
-+--------------------+-------+------------+-----+
-|  0.0.0.0/0         |  80   |  tcp       |  80 |
-|  xxx.xxx.xxx.xx/32 |  22   |  tcp       |  22 |
-+--------------------+-------+------------+-----+
-```
+![보안 그룹 세부 정보](docs/assets/console-sg-detail.png)
 
-포트 범위가 각각 80, 22 한 개씩이고 22번은 /32 단일 주소로 묶여 있습니다. 전체 포트를 여는 규칙이나 22번을 0.0.0.0/0으로 여는 규칙은 만들지 않았습니다. SSH는 서버를 다루는 통로라 열려 있으면 곧바로 비밀번호 대입 시도가 들어옵니다. 반면 HTTP는 서비스 자체가 불특정 다수를 받아야 하므로 열어둘 수밖에 없고, 대신 그 뒤에 있는 웹 서버만 노출됩니다.
+전체 포트를 여는 규칙이나 22번을 0.0.0.0/0으로 여는 규칙은 만들지 않았습니다. SSH는 서버를 다루는 통로라 열려 있으면 곧바로 비밀번호 대입 시도가 들어옵니다. 반면 HTTP는 서비스 자체가 불특정 다수를 받아야 하므로 열어둘 수밖에 없고, 대신 그 뒤에 있는 웹 서버만 노출됩니다.
 
 ## 인스턴스 생성
 
-키페어를 만들어 개인키를 로컬에 저장했습니다.
+OS는 Ubuntu, 인스턴스 유형은 프리 티어 대상인 t3.micro, 스토리지는 기본값인 8GiB gp3을 사용했습니다. 키 페어 `b3-1-key`를 만들어 개인키 파일을 내려받았고, 네트워크는 앞에서 만든 VPC와 서브넷, 보안 그룹을 지정했습니다. 퍼블릭 IP 자동 할당은 서브넷 설정을 따라 활성화 상태입니다.
 
-```bash
-$ aws ec2 create-key-pair --key-name b3-1-key \
-    --tag-specifications 'ResourceType=key-pair,Tags=[{Key=Name,Value=b3-1-key}]' \
-    --query 'KeyMaterial' --output text > b3-1-key.pem
-$ chmod 400 b3-1-key.pem
-$ aws ec2 describe-key-pairs --key-names b3-1-key --query 'KeyPairs[0].{Name:KeyName,Type:KeyType,Fingerprint:KeyFingerprint}'
-{
-    "Name": "b3-1-key",
-    "Type": "rsa",
-    "Fingerprint": "df:16:49:3c:a1:93:d0:dd:db:91:f6:a7:93:d9:ef:47:e7:45:a2:12"
-}
-```
+![인스턴스 시작 설정](docs/assets/console-launch-settings.png)
 
-OS는 Ubuntu 24.04 LTS를 골랐습니다. AMI ID는 리전마다 다르고 새 빌드가 나올 때마다 바뀌므로, Canonical 계정이 소유한 이미지 중 가장 최근 것을 조회해서 사용했습니다.
+시작된 인스턴스입니다. 퍼블릭 IP 43.201.49.58, 프라이빗 IP 10.0.1.170을 받았습니다.
 
-```bash
-$ aws ec2 describe-images --owners 099720109477 \
-    --filters 'Name=name,Values=ubuntu/images/hvm-ssd*/ubuntu-noble-24.04-amd64-server-*' 'Name=state,Values=available' \
-    --query 'sort_by(Images,&CreationDate)[-1].{ImageId:ImageId,Name:Name,CreationDate:CreationDate}'
-{
-    "ImageId": "ami-086a43496cb46286c",
-    "Name": "ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-20260904",
-    "CreationDate": "2026-09-04T11:45:57.000Z"
-}
-```
+![인스턴스 세부 정보](docs/assets/console-instance-detail.png)
 
-앞에서 만든 서브넷과 보안 그룹을 지정해 t2.micro 인스턴스 한 대를 만들었습니다.
-
-```bash
-$ aws ec2 run-instances --image-id ami-086a43496cb46286c --instance-type t2.micro \
-    --key-name b3-1-key --subnet-id subnet-07dfd6eac691dacaa --security-group-ids sg-0d48678d6a69187e0 \
-    --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=b3-1-web}]' \
-    --query 'Instances[0].{InstanceId:InstanceId,InstanceType:InstanceType,State:State.Name,SubnetId:SubnetId}'
-{
-    "InstanceId": "i-03b18cea700e89319",
-    "InstanceType": "t2.micro",
-    "State": "pending",
-    "SubnetId": "subnet-07dfd6eac691dacaa"
-}
-$ aws ec2 wait instance-running --instance-ids i-03b18cea700e89319
-$ aws ec2 describe-instances --instance-ids i-03b18cea700e89319 \
-    --query 'Reservations[0].Instances[0].{State:State.Name,PublicIp:PublicIpAddress,PrivateIp:PrivateIpAddress,Volume:BlockDeviceMappings[0].Ebs.VolumeId}'
-{
-    "State": "running",
-    "PublicIp": "43.201.149.54",
-    "PrivateIp": "10.0.1.203",
-    "Volume": "vol-0a0024f0cf452a8bd"
-}
-```
-
-프라이빗 IP 10.0.1.203은 서브넷 대역 10.0.1.0/24 안에서 받은 주소이고, 퍼블릭 IP 43.201.149.54는 서브넷 속성을 켜둔 덕분에 자동으로 붙었습니다.
+프라이빗 IP는 서브넷 대역 10.0.1.0/24 안에서 받은 주소이고, 퍼블릭 IP는 서브넷 속성을 켜둔 덕분에 자동으로 붙었습니다.
 
 ## SSH 접속과 웹 서버 배포
 
-보안 그룹에 등록한 IP에서 SSH로 접속됩니다.
+내려받은 키 파일의 권한을 좁히고 접속했습니다. 보안 그룹에 등록한 주소에서 들어오므로 접속이 됩니다.
 
 ```bash
-$ ssh -i b3-1-key.pem ubuntu@43.201.149.54 'hostname; . /etc/os-release && echo $PRETTY_NAME; uptime'
-Warning: Permanently added '43.201.149.54' (ED25519) to the list of known hosts.
-ip-10-0-1-203
-Ubuntu 24.04.4 LTS
- 03:01:16 up 0 min,  1 user,  load average: 0.30, 0.09, 0.03
+$ chmod 400 b3-1-key.pem
+$ ssh -i b3-1-key.pem ubuntu@43.201.49.58 'hostname; . /etc/os-release && echo $PRETTY_NAME'
+ip-10-0-1-170
+Ubuntu 26.04 LTS
 ```
 
-인스턴스에서 바깥으로 나가는 통신도 되는지 확인했습니다. 라우트 테이블의 0.0.0.0/0 경로와 인터넷 게이트웨이가 동작하고 있다는 뜻입니다.
+인스턴스에서 바깥으로 나가는 통신도 확인했습니다. 라우팅 테이블의 0.0.0.0/0 경로와 인터넷 게이트웨이가 동작하고 있다는 뜻입니다.
 
 ```bash
-$ ssh -i b3-1-key.pem ubuntu@43.201.149.54 'curl -sS -I https://example.com | head -3'
+$ ssh -i b3-1-key.pem ubuntu@43.201.49.58 'curl -sS -I https://example.com | head -1'
 HTTP/2 200
-date: Fri, 18 Sep 2026 03:01:40 GMT
-content-type: text/html
 ```
 
 nginx를 설치했습니다.
 
 ```bash
-$ ssh -i b3-1-key.pem ubuntu@43.201.149.54 'sudo apt-get update -qq && sudo apt-get install -y -qq nginx'
-$ ssh -i b3-1-key.pem ubuntu@43.201.149.54 'nginx -v; systemctl is-active nginx; systemctl status nginx --no-pager | head -6'
-nginx version: nginx/1.24.0 (Ubuntu)
+$ ssh -i b3-1-key.pem ubuntu@43.201.49.58 'sudo apt-get update -qq && sudo apt-get install -y -qq nginx; nginx -v; systemctl is-active nginx'
+nginx version: nginx/1.28.3 (Ubuntu)
 active
-● nginx.service - A high performance web server and a reverse proxy server
-     Loaded: loaded (/usr/lib/systemd/system/nginx.service; enabled; preset: enabled)
-     Active: active (running) since Fri 2026-09-18 03:02:22 UTC; 27s ago
-       Docs: man:nginx(8)
-    Process: 1827 ExecStartPre=/usr/sbin/nginx -t -q -g daemon on; master_process on; (code=exited, status=0/SUCCESS)
-    Process: 1829 ExecStart=/usr/sbin/nginx -g daemon on; master_process on; (code=exited, status=0/SUCCESS)
+```
+
+헬스체크용 경로도 함께 두기 위해 기본 사이트 설정에 `/health`를 추가했습니다. 정확히 일치하는 경로만 받도록 `=`를 붙였고 응답은 고정 문자열입니다.
+
+```bash
+$ ssh -i b3-1-key.pem ubuntu@43.201.49.58 'cat /etc/nginx/sites-available/default'
+server {
+    listen 80 default_server;
+
+    root /var/www/html;
+    index index.nginx-debian.html;
+
+    location = /health {
+        default_type text/plain;
+        return 200 'OK';
+    }
+}
+$ ssh -i b3-1-key.pem ubuntu@43.201.49.58 'sudo nginx -t && sudo systemctl reload nginx'
+nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+nginx: configuration file /etc/nginx/nginx.conf test is successful
 ```
 
 인스턴스 안에서 자기 자신에게 요청하면 200이 돌아옵니다. 여기까지는 보안 그룹과 무관하게 서버 프로세스가 살아 있는지만 확인하는 단계입니다.
 
 ```bash
-$ ssh -i b3-1-key.pem ubuntu@43.201.149.54 'curl -sS -o /dev/null -w "%{http_code}\n" http://localhost; curl -sS http://localhost | head -8'
-200
-<!DOCTYPE html>
-<html>
-<head>
-<title>Welcome to nginx!</title>
-<style>
-html { color-scheme: light dark; }
-body { width: 35em; margin: 0 auto;
-font-family: Tahoma, Verdana, Arial, sans-serif; }
+$ ssh -i b3-1-key.pem ubuntu@43.201.49.58 'curl -sS -o /dev/null -w "localhost:%{http_code}\n" http://localhost; curl -sS http://localhost/health'
+localhost:200
+OK
 ```
 
 ## 구성도
 
 ![아키텍처 구성도](docs/architecture.png)
 
-외부 요청은 인터넷 게이트웨이를 통해 VPC로 들어옵니다. 라우트 테이블이 목적지를 보고 전달할 곳을 정하고, 퍼블릭 서브넷에 있는 인스턴스 앞에서 보안 그룹이 포트를 판단합니다. 80번이면 통과해 nginx가 응답하고, 22번은 등록된 주소에서 온 것만 통과합니다. 인스턴스가 밖으로 나가는 트래픽도 같은 경로를 거꾸로 지나갑니다.
+외부 요청은 인터넷 게이트웨이를 통해 VPC로 들어옵니다. 라우팅 테이블이 목적지를 보고 전달할 곳을 정하고, 퍼블릭 서브넷에 있는 인스턴스 앞에서 보안 그룹이 포트를 판단합니다. 80번이면 통과해 nginx가 응답하고, 22번은 등록된 주소에서 온 것만 통과합니다. 인스턴스가 밖으로 나가는 트래픽도 같은 경로를 거꾸로 지나갑니다.
 
 ## 외부 접속 확인
 
-검증 방식은 (A) 브라우저 접속을 선택했습니다. 접속 주소는 `http://43.201.149.54`입니다. 웹 서버를 설치한 상태 그대로 확인할 수 있어 서버에 손댈 부분이 없기 때문입니다. `/health`를 호출하는 (B) 방식은 응답 문구가 고정되어 자동화된 감시에 쓰기 좋지만, 그 경로를 만들려면 nginx 설정을 따로 추가해야 합니다.
-
-로컬에서 퍼블릭 IP로 요청하면 200이 돌아옵니다.
-
-```bash
-$ curl -sS -o /dev/null -w "%{http_code}\n" http://43.201.149.54
-200
-```
-
-브라우저로 같은 주소에 접속한 화면입니다.
+검증 방식은 (A) 브라우저 접속을 선택했습니다. 접속 주소는 `http://43.201.49.58`입니다. 웹 서버를 설치한 상태 그대로 확인할 수 있어 서버에 손댈 부분이 없기 때문입니다.
 
 ![브라우저에서 퍼블릭 IP로 접속한 화면](docs/assets/browser-nginx.png)
 
-접속이 되지 않는 상황을 재현해 원인을 좁힌 과정은 [트러블슈팅 보고서](docs/troubleshooting.md)에 정리했습니다.
+같은 주소를 로컬 터미널에서 요청해도 200이 돌아옵니다.
+
+```bash
+$ curl -sS -o /dev/null -w "%{http_code}\n" http://43.201.49.58
+200
+```
+
+(B) 방식인 헬스체크 경로도 함께 확인했습니다. 응답 코드와 본문이 고정되어 감시 도구가 판정하기 쉽다는 점이 브라우저 방식과 다릅니다.
+
+```bash
+$ curl -sS -D - http://43.201.49.58/health
+HTTP/1.1 200 OK
+Server: nginx/1.28.3 (Ubuntu)
+Date: Sat, 19 Sep 2026 02:49:15 GMT
+Content-Type: text/plain
+Content-Length: 2
+Connection: keep-alive
+
+OK
+```
+
+![브라우저에서 헬스체크 경로를 호출한 화면](docs/assets/browser-health.png)
+
+구성 중 겪은 문제와 원인을 좁힌 과정은 [트러블슈팅 보고서](docs/troubleshooting.md)에 정리했습니다.
 
 ## 개념 정리
 
-### VPC, 서브넷, 라우트 테이블, 인터넷 게이트웨이
+### VPC, 서브넷, 라우팅 테이블, 인터넷 게이트웨이
 
-VPC는 계정 안에 만드는 격리된 네트워크이고, 생성할 때 정한 사설 대역(여기서는 10.0.0.0/16) 안에서만 주소를 나눠 줍니다. 서브넷은 그 대역을 잘라 가용 영역 하나에 배치하는 구획이며, 인스턴스는 항상 특정 서브넷에 들어갑니다. 라우트 테이블은 그 서브넷에서 나가는 패킷을 목적지 대역별로 어디에 넘길지 정하고, 인터넷 게이트웨이는 VPC와 인터넷 사이의 출입구 역할을 하며 퍼블릭 IP와 프라이빗 IP 사이의 주소 변환을 담당합니다.
+VPC는 계정 안에 만드는 격리된 네트워크이고, 생성할 때 정한 사설 대역(여기서는 10.0.0.0/16) 안에서만 주소를 나눠 줍니다. 서브넷은 그 대역을 잘라 가용 영역 하나에 배치하는 구획이며, 인스턴스는 항상 특정 서브넷에 들어갑니다. 라우팅 테이블은 그 서브넷에서 나가는 패킷을 목적지 대역별로 어디에 넘길지 정하고, 인터넷 게이트웨이는 VPC와 인터넷 사이의 출입구 역할을 하며 퍼블릭 IP와 프라이빗 IP 사이의 주소 변환을 담당합니다.
 
-퍼블릭 서브넷이라는 별도의 리소스 종류가 있는 것은 아닙니다. 연결된 라우트 테이블에 0.0.0.0/0 경로가 인터넷 게이트웨이로 향하는 서브넷을 퍼블릭 서브넷이라고 부릅니다. 이번 구성에서 서브넷 10.0.1.0/24가 퍼블릭인 이유도 라우트 테이블 rtb-0f3a3f86b4e749e9d에 그 경로가 있기 때문입니다.
+퍼블릭 서브넷이라는 별도의 리소스 종류가 있는 것은 아닙니다. 연결된 라우팅 테이블에 0.0.0.0/0 경로가 인터넷 게이트웨이로 향하는 서브넷을 퍼블릭 서브넷이라고 부릅니다.
 
 ### Security Group과 IAM의 차이
 
 Security Group은 인스턴스 앞에 붙는 가상 방화벽으로, 어떤 출발지에서 어떤 포트로 들어오는 트래픽을 받을지 판단합니다. IAM은 AWS API를 호출할 권한, 즉 누가 어떤 리소스를 만들고 지울 수 있는지를 판단합니다. 판단하는 대상이 트래픽과 API 호출로 다르기 때문에 한쪽을 조인다고 다른 쪽이 대체되지 않습니다. IAM 권한이 아무리 좁아도 보안 그룹이 22번을 전체 공개로 열어두면 서버는 그대로 노출되고, 반대로 보안 그룹을 잘 잠가도 IAM 권한이 넓으면 자격증명이 새는 순간 리소스를 마음대로 만들 수 있습니다.
 
-최소 권한을 적용하는 이유는 사고가 났을 때 피해 범위를 권한 범위로 묶어두기 위해서입니다. 이번 실습 사용자는 EC2와 VPC 조작만 가능해서 자신의 IAM 정보를 조회하는 것조차 거부됩니다.
+최소 권한을 적용하는 이유는 사고가 났을 때 피해 범위를 권한 범위로 묶어두기 위해서입니다. 권한이 부족해 작업이 막히면 오류 메시지에 찍힌 액션 이름 하나만 정책에 추가하는 방식으로 필요한 범위를 찾아갑니다. 막힐 때마다 `ec2:*`나 관리자 정책으로 한 번에 넘기면 왜 그 권한이 필요한지 알 수 없게 되고, 실습이 끝난 뒤에도 넓은 권한이 그대로 남습니다.
 
 ### 외부 요청이 웹 서버에 도달하기까지
 
-브라우저가 43.201.149.54로 요청을 보내면 네 가지가 모두 맞아야 응답이 돌아옵니다. 인스턴스에 퍼블릭 IP가 붙어 있어야 하고, 라우트 테이블에 인터넷 게이트웨이로 향하는 경로가 있어야 하며, 보안 그룹이 80번을 허용해야 하고, 인스턴스 안에서 웹 서버가 80번을 열고 있어야 합니다. 이 중 하나만 빠져도 증상은 대부분 똑같이 "응답 없음"으로 보이기 때문에, 확인은 바깥쪽에서 안쪽으로 순서대로 좁혀야 합니다.
+브라우저가 퍼블릭 IP로 요청을 보내면 네 가지가 모두 맞아야 응답이 돌아옵니다. 인스턴스에 퍼블릭 IP가 붙어 있어야 하고, 라우팅 테이블에 인터넷 게이트웨이로 향하는 경로가 있어야 하며, 보안 그룹이 80번을 허용해야 하고, 인스턴스 안에서 웹 서버가 80번을 열고 있어야 합니다. 이 중 하나만 빠져도 증상은 대부분 똑같이 "응답 없음"으로 보이기 때문에, 확인은 바깥쪽에서 안쪽으로 순서대로 좁혀야 합니다.
 
 ### 과금이 발생하는 지점
 
@@ -401,118 +264,46 @@ EC2는 인스턴스가 실행 중인 시간만큼, EBS 볼륨은 인스턴스를
 같은 인스턴스에 Docker를 설치하고, 패키지로 설치한 nginx 대신 컨테이너가 80번을 서비스하도록 바꿨습니다.
 
 ```bash
-$ ssh -i b3-1-key.pem ubuntu@43.201.149.54 'sudo apt-get install -y -qq docker.io; docker --version; sudo systemctl is-active docker'
-Docker version 29.1.3, build 29.1.3-0ubuntu3~24.04.2
+$ ssh -i b3-1-key.pem ubuntu@43.201.49.58 'sudo apt-get install -y -qq docker.io; docker --version; sudo systemctl is-active docker'
+Docker version 29.1.3, build 29.1.3-0ubuntu4.1
 active
 ```
 
-컨테이너가 호스트의 80번을 받아야 하므로 패키지로 설치한 nginx를 먼저 내렸습니다. 이미지는 공개 이미지 `nginx:alpine`을 사용하고, 서비스할 페이지는 컨테이너 안의 기본 문서 경로에 읽기 전용으로 마운트했습니다.
+컨테이너가 호스트의 80번을 받아야 하므로 패키지로 설치한 nginx를 먼저 내렸습니다. 이미지는 공개 이미지 `nginx:alpine`을 사용하고, 서비스할 페이지와 nginx 설정을 컨테이너 안에 읽기 전용으로 마운트했습니다. 설정에는 앞에서와 같은 `/health` 경로를 넣어 컨테이너로 바꾼 뒤에도 같은 방식으로 확인할 수 있게 했습니다.
 
 ```bash
-$ scp -i b3-1-key.pem app/index.html ubuntu@43.201.149.54:/home/ubuntu/index.html
-$ ssh -i b3-1-key.pem ubuntu@43.201.149.54 'sudo systemctl stop nginx && sudo systemctl disable nginx'
-Removed "/etc/systemd/system/multi-user.target.wants/nginx.service".
-$ ssh -i b3-1-key.pem ubuntu@43.201.149.54 'sudo docker run -d --name web -p 80:80 -v /home/ubuntu/index.html:/usr/share/nginx/html/index.html:ro nginx:alpine'
-c98e231cf98bf76540780e3cc4d48a21b5798d9f6e480ae681093dae37bdf104
+$ scp -i b3-1-key.pem app/index.html ubuntu@43.201.49.58:/home/ubuntu/index.html
+$ ssh -i b3-1-key.pem ubuntu@43.201.49.58 'sudo systemctl stop nginx && sudo systemctl disable nginx'
+$ ssh -i b3-1-key.pem ubuntu@43.201.49.58 'sudo docker run -d --name web -p 80:80 -v /home/ubuntu/index.html:/usr/share/nginx/html/index.html:ro -v /home/ubuntu/default.conf:/etc/nginx/conf.d/default.conf:ro nginx:alpine'
+e165bbb6e980349f4364a6acb889bf7c8a8619e8d1615d50f286c9943aa80c74
 ```
 
 실행한 이미지는 `nginx:alpine`, 컨테이너 이름은 `web`, 포트 매핑은 호스트 80번을 컨테이너 80번에 연결한 `-p 80:80`입니다.
 
 ```bash
-$ ssh -i b3-1-key.pem ubuntu@43.201.149.54 'sudo docker ps'
+$ ssh -i b3-1-key.pem ubuntu@43.201.49.58 'sudo docker ps'
 CONTAINER ID   IMAGE          COMMAND                  CREATED          STATUS         PORTS                                 NAMES
-c98e231cf98b   nginx:alpine   "/docker-entrypoint.…"   10 seconds ago   Up 9 seconds   0.0.0.0:80->80/tcp, [::]:80->80/tcp   web
+e165bbb6e980   nginx:alpine   "/docker-entrypoint.…"   31 seconds ago   Up 30 seconds  0.0.0.0:80->80/tcp, [::]:80->80/tcp   web
 ```
 
 ![docker ps 실행 화면](docs/assets/docker-ps.png)
 
-인스턴스 안에서 자기 자신에게 요청하면 200이 돌아옵니다. 응답 헤더의 서버 버전이 패키지로 설치했던 nginx/1.24.0이 아니라 이미지에 들어 있는 nginx/1.31.6이므로, 응답을 돌려주는 주체가 컨테이너임을 알 수 있습니다.
+인스턴스 안에서 요청하면 200이 돌아옵니다. 응답 헤더의 서버 버전이 패키지로 설치했던 nginx/1.28.3이 아니라 이미지에 들어 있는 nginx/1.31.6이므로, 응답을 돌려주는 주체가 컨테이너임을 알 수 있습니다.
 
 ```bash
-$ ssh -i b3-1-key.pem ubuntu@43.201.149.54 'curl -sS -o /dev/null -w "localhost:%{http_code}\n" http://localhost; curl -sS -I http://localhost | head -2; curl -sS http://localhost'
+$ ssh -i b3-1-key.pem ubuntu@43.201.49.58 'curl -sS -o /dev/null -w "localhost:%{http_code}\n" http://localhost; curl -sS -I http://localhost | head -2; curl -sS http://localhost/health'
 localhost:200
 HTTP/1.1 200 OK
 Server: nginx/1.31.6
-<!DOCTYPE html>
-<html lang="ko">
-<head>
-  <meta charset="utf-8">
-  <title>B3-1</title>
-</head>
-<body>
-  <h1>B3-1</h1>
-  <p>Hello Cloud</p>
-</body>
-</html>
-```
-
-외부에서도 같은 응답을 받습니다.
-
-```bash
-$ curl -sS -o /dev/null -w "%{http_code}\n" http://43.201.149.54
-200
-$ curl -sS http://43.201.149.54
-<!DOCTYPE html>
-<html lang="ko">
-<head>
-  <meta charset="utf-8">
-  <title>B3-1</title>
-</head>
-<body>
-  <h1>B3-1</h1>
-  <p>Hello Cloud</p>
-</body>
-</html>
-```
-
-브라우저에서 접속하면 컨테이너가 서비스하는 페이지가 보입니다.
-
-![컨테이너 배포 후 브라우저 접속 화면](docs/assets/browser-container.png)
-
-## 헬스체크 방식으로도 확인
-
-외부 접속 검증은 (A) 브라우저로 했지만, (B) 방식이 실제로 무엇을 추가해야 하는지 확인해보려고 같은 구성을 한 번 더 만들어 시험했습니다. 앞의 리소스를 정리한 뒤라 VPC부터 다시 만들었고, 이때 인스턴스 주소는 3.36.85.14입니다.
-
-nginx 기본 사이트 설정에 `/health` 위치를 추가했습니다. 정확히 일치하는 경로만 받도록 `=`를 붙였고, 응답은 고정 문자열입니다.
-
-```bash
-$ ssh -i b3-1-key.pem ubuntu@3.36.85.14 'cat /etc/nginx/sites-available/default'
-server {
-    listen 80 default_server;
-
-    root /var/www/html;
-    index index.nginx-debian.html;
-
-    location = /health {
-        default_type text/plain;
-        return 200 'OK';
-    }
-}
-$ ssh -i b3-1-key.pem ubuntu@3.36.85.14 'sudo nginx -t && sudo systemctl reload nginx'
-nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
-nginx: configuration file /etc/nginx/nginx.conf test is successful
-```
-
-외부에서 호출하면 200과 고정 응답이 돌아옵니다.
-
-```bash
-$ curl -sS -D - http://3.36.85.14/health
-HTTP/1.1 200 OK
-Server: nginx/1.24.0 (Ubuntu)
-Date: Fri, 18 Sep 2026 06:14:13 GMT
-Content-Type: text/plain
-Content-Length: 2
-Connection: keep-alive
-
 OK
 ```
 
-![브라우저에서 헬스체크 경로를 호출한 화면](docs/assets/browser-health.png)
+외부에서 브라우저로 접속하면 컨테이너가 서비스하는 페이지가 보입니다.
 
-두 방식의 차이는 서버에 손을 대는지입니다. 브라우저 방식은 웹 서버를 올린 상태 그대로 확인하고, 헬스체크 방식은 설정을 추가하는 대신 응답 내용과 상태 코드가 고정되어 감시 도구가 판정하기 쉽습니다.
+![컨테이너 배포 후 브라우저 접속 화면](docs/assets/browser-container.png)
 
 ## 리소스 정리
 
-실습을 마친 뒤 만든 리소스를 모두 삭제했습니다. EC2 인스턴스는 종료했고 루트 EBS 볼륨은 종료와 함께 사라졌습니다. 인터넷 게이트웨이는 분리한 뒤 삭제했고 서브넷, 라우트 테이블, 보안 그룹, VPC, 키페어도 지웠습니다. Elastic IP와 NAT Gateway는 만들지 않았습니다.
+실습을 마친 뒤 만든 리소스를 모두 삭제했습니다. EC2 인스턴스는 종료했고 루트 EBS 볼륨은 종료와 함께 사라졌습니다. VPC를 지우면서 서브넷, 라우팅 테이블, 인터넷 게이트웨이, 보안 그룹이 함께 삭제됐고 키 페어도 지웠습니다. Elastic IP와 NAT Gateway는 만들지 않았습니다.
 
-삭제 명령과 남은 리소스 조회 결과는 [리소스 정리 체크리스트](docs/cleanup-checklist.md)에 있습니다.
+삭제 화면과 남은 리소스 확인 결과는 [리소스 정리 체크리스트](docs/cleanup-checklist.md)에 있습니다.
