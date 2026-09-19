@@ -4,7 +4,7 @@ AWS 서울 리전에 VPC로 격리된 네트워크를 구성하고, 퍼블릭 �
 
 외부 접속 검증은 (A) 브라우저에서 `http://<퍼블릭IP>`로 접속하는 방식을 선택했습니다.
 
-지금 열려 있는 주소는 **http://43.203.251.38** 이고 헬스체크 경로는 **http://43.203.251.38/health** 입니다. 아래 기록과 화면은 실습 당시 구성이고 그 리소스는 정리했습니다. 읽는 동안 직접 눌러볼 수 있도록 같은 구성을 다시 올려둔 것이라 주소만 다릅니다.
+지금 열려 있는 주소는 **https://codyssey.run** 이고 헬스체크 경로는 **https://codyssey.run/health** 입니다. 퍼블릭 IP는 43.203.251.38이며 HTTP로 접속하면 HTTPS로 넘어갑니다. 아래 기록과 화면은 실습 당시 구성이고 그 리소스는 정리했습니다. 읽는 동안 직접 눌러볼 수 있도록 같은 구성을 다시 올려둔 것이라 주소만 다릅니다.
 
 ## 실행 환경
 
@@ -260,6 +260,75 @@ EC2는 인스턴스가 실행 중인 시간만큼, EBS 볼륨은 인스턴스를
 지금 구성은 인스턴스 한 대가 퍼블릭 IP를 직접 받아 서비스합니다. 트래픽이 늘면 그 한 대의 CPU와 nginx의 동시 연결 수가 먼저 한계에 도달하고, 인스턴스가 재시작되거나 중단되는 순간 서비스 전체가 멈춥니다. 대수를 늘리려 해도 퍼블릭 IP가 인스턴스에 직접 붙어 있어서 요청을 나눌 지점이 없습니다.
 
 두 대 이상으로 늘리려면 앞에 Application Load Balancer를 두고 인스턴스들을 대상 그룹으로 묶습니다. 로드밸런서는 서로 다른 가용 영역에 서브넷이 하나씩 필요하므로 지금의 단일 서브넷 구성에 서브넷을 하나 더 만들어야 하고, 보안 그룹도 80번을 로드밸런서에서만 받도록 바꿔 인스턴스가 직접 노출되지 않게 합니다. 세션이나 업로드 파일처럼 인스턴스 안에 쌓이는 상태가 있으면 어느 대에 붙느냐에 따라 결과가 달라지므로, 그 상태를 밖으로 빼는 작업이 대수를 늘리기 전에 선행되어야 합니다.
+
+## 보너스: 도메인 연결과 HTTPS 적용
+
+보유한 도메인 `codyssey.run`의 A 레코드를 인스턴스 퍼블릭 IP로 지정하고 Let's Encrypt 인증서를 발급했습니다. 이 작업은 문서 위쪽에 적어둔 확인용 환경에서 했고, 그 환경은 콘솔 대신 CLI로 만들었기 때문에 이 절의 AWS 명령은 CLI 기준입니다.
+
+도메인이 인스턴스를 가리키는지 먼저 확인했습니다.
+
+```bash
+$ dig +short codyssey.run A
+43.203.251.38
+$ curl -sS -o /dev/null -w "%{http_code}\n" http://codyssey.run
+200
+```
+
+HTTPS는 443번을 쓰므로 보안 그룹에 인바운드 규칙을 하나 더 추가했습니다.
+
+```bash
+$ aws ec2 authorize-security-group-ingress --group-id sg-01d1264505e4391f2 \
+    --protocol tcp --port 443 --cidr 0.0.0.0/0 \
+    --query 'SecurityGroupRules[0].SecurityGroupRuleId' --output text
+sgr-0208bc2b68f18267b
+```
+
+certbot이 도메인에 맞는 server 블록을 찾아야 하므로 nginx 설정에 `server_name`을 지정하고 certbot과 nginx 플러그인을 설치했습니다.
+
+```bash
+$ ssh -i b3-1-key.pem ubuntu@43.203.251.38 'sudo apt-get install -y -qq certbot python3-certbot-nginx; certbot --version'
+certbot 2.9.0
+```
+
+인증서를 발급하고 HTTP를 HTTPS로 넘기도록 설정했습니다. `--redirect`가 80번으로 온 요청을 443번으로 돌리는 설정을 nginx에 넣어줍니다.
+
+```bash
+$ ssh -i b3-1-key.pem ubuntu@43.203.251.38 'sudo certbot --nginx -d codyssey.run --non-interactive --agree-tos --register-unsafely-without-email --redirect'
+Certificate is saved at: /etc/letsencrypt/live/codyssey.run/fullchain.pem
+Key is saved at:         /etc/letsencrypt/live/codyssey.run/privkey.pem
+This certificate expires on 2026-12-18.
+These files will be updated when the certificate renews.
+Certbot has set up a scheduled task to automatically renew this certificate in the background.
+
+Deploying certificate
+Successfully deployed certificate for codyssey.run to /etc/nginx/sites-enabled/default
+Congratulations! You have successfully enabled HTTPS on https://codyssey.run
+```
+
+HTTPS로 접속하면 200이 돌아오고, HTTP로 들어온 요청은 301로 HTTPS에 넘어갑니다.
+
+```bash
+$ curl -sS -o /dev/null -w "%{http_code}\n" https://codyssey.run
+200
+$ curl -sS https://codyssey.run/health
+OK
+$ curl -sS -o /dev/null -w "%{http_code} -> %{redirect_url}\n" http://codyssey.run
+301 -> https://codyssey.run/
+```
+
+발급된 인증서의 발급자와 유효 기간입니다.
+
+```bash
+$ echo | openssl s_client -connect codyssey.run:443 -servername codyssey.run 2>/dev/null | openssl x509 -noout -issuer -subject -dates
+issuer=C=US, O=Let's Encrypt, CN=YE1
+subject=CN=codyssey.run
+notBefore=Sep 19 03:49:14 2026 GMT
+notAfter=Dec 18 03:49:13 2026 GMT
+```
+
+브라우저에서도 주소창에 경고 없이 도메인으로 열립니다.
+
+![도메인으로 HTTPS 접속한 화면](docs/assets/browser-https.png)
 
 ## 보너스: Docker 컨테이너로 웹 서비스 배포
 
